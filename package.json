@@ -1,0 +1,82 @@
+{
+  "name": "ai-sdk-provider-antigravity-cli",
+  "version": "0.1.0",
+  "description": "Vercel AI SDK provider for Google Antigravity CLI headless mode",
+  "homepage": "https://github.com/toandev95/ai-sdk-provider-antigravity-cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/toandev95/ai-sdk-provider-antigravity-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/toandev95/ai-sdk-provider-antigravity-cli/issues"
+  },
+  "keywords": [
+    "ai-sdk",
+    "antigravity",
+    "agy",
+    "google",
+    "cli",
+    "language-model",
+    "agent",
+    "provider"
+  ],
+  "license": "MIT",
+  "author": "toandev95",
+  "type": "module",
+  "sideEffects": false,
+  "types": "./dist/index.d.ts",
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/**/*",
+    "docs/**/*",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup && tsc -p tsconfig.build.json",
+    "clean": "rm -rf dist",
+    "dev": "tsup --watch",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run clean && npm run build",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --check .",
+    "format:fix": "prettier --write .",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:smoke": "vitest run --config vitest.smoke.config.ts",
+    "validate": "npm run build && npm run typecheck && npm run format && npm run lint && npm run test"
+  },
+  "dependencies": {
+    "@ai-sdk/provider": "^4.0.0",
+    "@ai-sdk/provider-utils": "^5.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.14.0",
+    "@types/node": "^22.10.2",
+    "ai": "^7.0.0",
+    "eslint": "^9.14.0",
+    "prettier": "^3.3.3",
+    "tsup": "8.5.1",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.6.0",
+    "vitest": "^3.2.7",
+    "zod": "^4.1.8"
+  },
+  "peerDependencies": {
+    "zod": "^4.1.8"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
