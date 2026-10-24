@@ -1,6 +1,8 @@
 import type { LanguageModelV4, ProviderV4 } from '@ai-sdk/provider';
 import { NoSuchModelError } from '@ai-sdk/provider';
 import { AntigravityLanguageModel } from './antigravity-language-model.js';
+import { RequestLimiter } from './antigravity-limiter.js';
+import { discoverModels, type AntigravityModelInfo } from './antigravity-models.js';
 import type {
   AntigravityModelId,
   AntigravityProviderSettings,
@@ -11,19 +13,25 @@ export interface AntigravityProvider extends ProviderV4 {
   (modelId?: AntigravityModelId, settings?: AntigravitySettings): LanguageModelV4;
   chat(modelId?: AntigravityModelId, settings?: AntigravitySettings): LanguageModelV4;
   languageModel(modelId?: AntigravityModelId, settings?: AntigravitySettings): LanguageModelV4;
+  listModels(options?: { signal?: AbortSignal }): Promise<AntigravityModelInfo[]>;
   embeddingModel(modelId: string): never;
   imageModel(modelId: string): never;
 }
 
 export function createAntigravity(options: AntigravityProviderSettings = {}): AntigravityProvider {
+  const limiter = new RequestLimiter(options.maxConcurrentRequests);
   const createModel = (
     modelId: AntigravityModelId = 'default',
     settings: AntigravitySettings = {},
   ) =>
-    new AntigravityLanguageModel(modelId, {
-      ...options.defaultSettings,
-      ...settings,
-    });
+    new AntigravityLanguageModel(
+      modelId,
+      {
+        ...options.defaultSettings,
+        ...settings,
+      },
+      limiter,
+    );
 
   const provider = Object.assign(
     (modelId?: AntigravityModelId, settings?: AntigravitySettings) =>
@@ -33,6 +41,7 @@ export function createAntigravity(options: AntigravityProviderSettings = {}): An
 
   provider.chat = createModel;
   provider.languageModel = createModel;
+  provider.listModels = (request) => discoverModels(options.defaultSettings, request?.signal);
   provider.embeddingModel = ((modelId: string) => {
     throw new NoSuchModelError({ modelId, modelType: 'embeddingModel' });
   }) as never;

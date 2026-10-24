@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     fileParallelism: false,
     include: ['test/smoke/**/*.test.ts'],
+    reporters: ['verbose'],
     testTimeout: 120_000,
   },
 });

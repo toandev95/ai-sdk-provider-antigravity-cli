@@ -17,6 +17,8 @@ import { parseProviderOptions } from '@ai-sdk/provider-utils';
 import { z } from 'zod';
 import { normalizeCliError, createCliError } from './antigravity-errors.js';
 import { mapPrompt } from './antigravity-prompt.js';
+import { permissionArgs } from './antigravity-permissions.js';
+import { RequestLimiter } from './antigravity-limiter.js';
 import {
   mapUsage,
   parseEvent,
@@ -38,11 +40,16 @@ const providerOptionsSchema: z.ZodType<AntigravityProviderOptions> = z
     continue: z.boolean().optional(),
     conversationId: z.string().min(1).optional(),
     dangerouslySkipPermissions: z.boolean().optional(),
-    effort: z.enum(['low', 'medium', 'high']).optional(),
+    effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional(),
     includeDirectories: z.array(z.string().min(1)).optional(),
     printTimeout: z.string().min(1).optional(),
     rawEvents: z.boolean().optional(),
     sandbox: z.boolean().optional(),
+    permissionMode: z
+      .enum(['inherit', 'sandbox', 'accept-edits', 'auto', 'plan', 'turbo'])
+      .optional(),
+    unsupportedFeatures: z.enum(['warn', 'error']).optional(),
+    timeoutMs: z.number().int().positive().max(2_147_483_647).optional(),
   })
   .strict();
 
@@ -109,7 +116,11 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
   private readonly settings: AntigravitySettings;
   private readonly logger: Logger;
 
-  constructor(modelId: AntigravityModelId, settings: AntigravitySettings = {}) {
+  constructor(
+    modelId: AntigravityModelId,
+    settings: AntigravitySettings = {},
+    private readonly limiter = new RequestLimiter(),
+  ) {
     if (!modelId.trim()) {
       throw new NoSuchModelError({ modelId, modelType: 'languageModel' });
     }
@@ -127,7 +138,11 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
     if (settings.continue && settings.conversationId) {
       throw new Error('`continue` and `conversationId` are mutually exclusive.');
     }
-    if (settings.dangerouslySkipPermissions && settings.sandbox) {
+    if (
+      settings.permissionMode === undefined &&
+      settings.dangerouslySkipPermissions &&
+      settings.sandbox
+    ) {
       this.logger.warn(
         '`dangerouslySkipPermissions` takes precedence over `sandbox`; sandbox mode was not passed.',
       );
@@ -139,6 +154,16 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
     settings: AntigravitySettings,
     responseFormat: Parameters<LanguageModelV4['doStream']>[0]['responseFormat'],
   ): { command: string; args: string[] } {
+    if (
+      settings.permissionMode &&
+      settings.agyArgs?.some((arg) =>
+        ['--dangerously-skip-permissions', '--sandbox', '--mode'].some(
+          (flag) => arg === flag || arg.startsWith(`${flag}=`),
+        ),
+      )
+    ) {
+      throw new Error('Use permissionMode instead of permission flags in agyArgs.');
+    }
     const args = [
       ...(settings.agyArgs ?? []),
       '--input-format',
@@ -152,14 +177,10 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
     if (settings.agent) args.push('--agent', settings.agent);
     if (settings.continue) args.push('--continue');
     if (settings.conversationId) args.push('--conversation', settings.conversationId);
-    if (settings.dangerouslySkipPermissions) {
-      args.push('--dangerously-skip-permissions');
-    } else if (settings.sandbox !== false) {
-      args.push('--sandbox');
-    }
+    args.push(...permissionArgs(settings));
     if (settings.printTimeout) args.push('--print-timeout', settings.printTimeout);
     for (const directory of settings.includeDirectories ?? []) {
-      args.push('--include-directories', directory);
+      args.push('--add-dir', directory);
     }
     if (responseFormat?.type === 'json' && responseFormat.schema !== undefined) {
       args.push('--json-schema', JSON.stringify(responseFormat.schema));
@@ -237,35 +258,73 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
       if (
         options.reasoning === 'low' ||
         options.reasoning === 'medium' ||
-        options.reasoning === 'high'
+        options.reasoning === 'high' ||
+        options.reasoning === 'xhigh'
       ) {
         settings = { ...settings, effort: options.reasoning };
       } else {
         warnings.push({
           type: 'unsupported',
           feature: 'reasoning',
-          details: `Antigravity supports low, medium, or high effort; '${options.reasoning}' was ignored.`,
+          details: `Antigravity supports low, medium, high, xhigh, or max effort; '${options.reasoning}' was ignored.`,
         });
       }
     }
 
+    if (
+      settings.unsupportedFeatures === 'error' &&
+      warnings.some((w) => w.type === 'unsupported')
+    ) {
+      throw new Error(
+        `Unsupported Antigravity features: ${warnings
+          .filter((w) => w.type === 'unsupported')
+          .map((w) => w.feature)
+          .join(', ')}`,
+      );
+    }
+    if (
+      settings.timeoutMs !== undefined &&
+      (!Number.isInteger(settings.timeoutMs) ||
+        settings.timeoutMs < 1 ||
+        settings.timeoutMs > 2_147_483_647)
+    ) {
+      throw new Error('timeoutMs must be a positive integer no greater than 2147483647.');
+    }
+    const signal =
+      settings.timeoutMs === undefined
+        ? options.abortSignal
+        : AbortSignal.any([
+            ...(options.abortSignal ? [options.abortSignal] : []),
+            AbortSignal.timeout(settings.timeoutMs),
+          ]);
     const { command, args } = this.buildCommand(settings, options.responseFormat);
+    const release = await this.limiter.acquire(signal);
     const structuredResponse = options.responseFormat?.type === 'json';
     this.logger.debug(`Starting ${command} with ${args.length} arguments.`);
     let child: ChildProcessWithoutNullStreams | undefined;
+    let cancelStream = () => {};
 
     const stream = new ReadableStream<LanguageModelV4StreamPart>({
       start: (controller) => {
-        child = spawn(command, args, {
-          cwd: settings.cwd,
-          env: { ...process.env, ...settings.env },
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
+        try {
+          child = spawn(command, args, {
+            cwd: settings.cwd,
+            env: { ...process.env, ...settings.env },
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
+        } catch (error) {
+          release();
+          throw error;
+        }
         controller.enqueue({ type: 'stream-start', warnings });
 
         let buffer = '';
         let stderr = '';
         let settled = false;
+        cancelStream = () => {
+          settled = true;
+          child?.kill('SIGTERM');
+        };
         let textId: string | undefined;
         let textStepIndex: number | undefined;
         let emittedText = '';
@@ -277,6 +336,7 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
         const fail = (error: unknown) => {
           if (settled) return;
           settled = true;
+          release();
           controller.error(normalizeCliError(error, stderr));
         };
 
@@ -372,6 +432,7 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
         };
 
         const processLine = (line: string) => {
+          if (settled) return;
           if (!line.trim()) return;
           const event = parseEvent(line);
           if (event) processEvent(event);
@@ -379,15 +440,10 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
         };
 
         const abort = () => {
-          abortReason = options.abortSignal?.reason ?? new Error('Request aborted');
+          abortReason = signal?.reason ?? new Error('Request aborted');
           child?.kill('SIGTERM');
         };
-        if (options.abortSignal?.aborted) {
-          abort();
-          fail(options.abortSignal.reason ?? new Error('Request aborted'));
-          return;
-        }
-        options.abortSignal?.addEventListener('abort', abort, { once: true });
+        signal?.addEventListener('abort', abort, { once: true });
 
         child.stdout.setEncoding('utf8');
         child.stdout.on('data', (chunk: string) => {
@@ -404,9 +460,10 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
         });
         child.on('error', fail);
         child.on('close', (code) => {
-          options.abortSignal?.removeEventListener('abort', abort);
-          if (buffer) processLine(buffer);
+          release();
+          signal?.removeEventListener('abort', abort);
           if (settled) return;
+          if (buffer) processLine(buffer);
           if (abortReason !== undefined) {
             fail(abortReason);
             return;
@@ -458,12 +515,13 @@ export class AntigravityLanguageModel implements LanguageModelV4 {
           controller.close();
         });
 
+        if (signal?.aborted) abort();
         child.stdin.end(
           `${JSON.stringify({ event: 'user', message: { content: mapped.text } })}\n`,
         );
       },
       cancel: () => {
-        child?.kill('SIGTERM');
+        cancelStream();
       },
     });
 

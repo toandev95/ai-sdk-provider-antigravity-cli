@@ -1,4 +1,10 @@
 const args = process.argv.slice(2);
+if (args.includes('models')) {
+  process.stdout.write(
+    'Fetching available models...\ngemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)\nfuture-model-v9\tFuture Model\n',
+  );
+  process.exit(0);
+}
 let input = '';
 
 for await (const chunk of process.stdin) input += chunk;
@@ -20,7 +26,53 @@ emit({
   init: { argv: args, cwd: process.cwd(), permission_mode: 'request-review', tools: ['mock_tool'] },
 });
 
-if (content.includes('ABORT_FOREVER')) {
+if (content.includes('RUN_MCP_ORDER')) {
+  const { URL } = await import('node:url');
+  const { readFile } = await import('node:fs/promises');
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+  const { StreamableHTTPClientTransport } =
+    await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
+  const config = JSON.parse(await readFile('.agents/mcp_config.json', 'utf8')).mcpServers.app;
+  const client = new Client({ name: 'mock-agy', version: '1.0.0' });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(config.serverUrl), {
+      requestInit: { headers: config.headers },
+    }),
+  );
+  const definitions = await client.listTools();
+  const name = definitions.tools[0].name;
+  emit({
+    event: 'step_update',
+    step_update: {
+      step_index: 1,
+      step_type: 'tool',
+      state: 'ACTIVE',
+      tool_name: name,
+      tool_info: { name, parameters: { id: 'A42' } },
+    },
+  });
+  const result = await client.callTool({ name, arguments: { id: 'A42' } });
+  emit({
+    event: 'step_update',
+    step_update: {
+      step_index: 1,
+      step_type: 'tool',
+      state: result.isError ? 'ERROR' : 'DONE',
+      tool_name: name,
+      tool_info: { name, output: result, ...(result.isError ? { error: result } : {}) },
+    },
+  });
+  await client.close();
+  emit({
+    event: 'result',
+    result: {
+      conversation_id: 'mock-conversation',
+      status: 'SUCCESS',
+      response: result.isError ? 'Tool denied' : 'Order A42: shipped',
+      usage,
+    },
+  });
+} else if (content.includes('ABORT_FOREVER')) {
   setTimeout(() => {}, 60_000);
 } else if (content.includes('FAIL_REQUEST')) {
   emit({

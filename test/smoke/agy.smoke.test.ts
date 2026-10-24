@@ -3,14 +3,19 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { antigravity } from '../../src/index.js';
 
-const model = () =>
-  antigravity('default', {
-    cwd: process.cwd(),
-    logger: false,
-    printTimeout: '2m',
-  });
+const modelIds = (process.env.AGY_SMOKE_MODELS ?? 'gemini-3.8-flash-medium,gemini-4-argon-medium')
+  .split(',')
+  .map((id) => id.trim())
+  .filter(Boolean);
 
-describe('real Antigravity CLI smoke', () => {
+describe.each(modelIds)('real Antigravity CLI smoke: %s', (modelId) => {
+  const model = () =>
+    antigravity(modelId, {
+      cwd: process.cwd(),
+      includeDirectories: [process.cwd()],
+      logger: false,
+      printTimeout: '90s',
+    });
   it('handles a multi-message AI SDK transcript', async () => {
     const result = await generateText({
       model: model(),
@@ -29,7 +34,8 @@ describe('real Antigravity CLI smoke', () => {
   it('streams native tools and final text through fullStream', async () => {
     const result = streamText({
       model: model(),
-      prompt: 'Use an Antigravity tool to inspect the current directory, then name one entry.',
+      prompt:
+        'Use a file-reading tool to read package.json in the current directory, then report the package name. Do not run terminal commands or use subagents.',
     });
     const types: string[] = [];
 
@@ -38,6 +44,8 @@ describe('real Antigravity CLI smoke', () => {
     expect(types).toContain('tool-call');
     expect(types).toContain('tool-result');
     expect(types).toContain('finish');
+    expect(types).not.toContain('error');
+    expect(await result.text).toContain('ai-sdk-provider-antigravity-cli');
   });
 
   it('generates and validates a nested structured object', async () => {

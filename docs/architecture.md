@@ -52,6 +52,12 @@ Antigravity tools and AI SDK function tools have different owners:
   Antigravity stream-input schema cannot receive their definitions, so the provider warns and does
   not forward them.
 
+Applications can explicitly register executable SDK tools with `createSdkMcpServer`. A local,
+authenticated MCP endpoint invokes the callbacks in the host process. `createMcpWorkspace` writes
+its configuration into a fresh temporary workspace, which the caller supplies as the model's `cwd`.
+The CLI still owns orchestration and emits provider-executed tool events. Inline AI SDK `tools`,
+`toolChoice`, and SDK UI approval events are not transparently converted by this bridge.
+
 Conflating these paths would make the host believe it controls execution that already happened in
 the CLI. The explicit distinction keeps approvals and audit trails accurate.
 

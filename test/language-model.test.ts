@@ -71,7 +71,7 @@ describe('Antigravity language model', () => {
         'conversation-42',
         '--effort',
         'high',
-        '--include-directories',
+        '--add-dir',
         '/shared/assets',
         '--model',
         'custom-model',
@@ -88,6 +88,23 @@ describe('Antigravity language model', () => {
         prompt: prompt('INVALID_SETTINGS'),
       }),
     ).rejects.toThrow('mutually exclusive');
+  });
+
+  it.each(['xhigh', 'max'] as const)('forwards the new %s reasoning effort', async (effort) => {
+    const result = await provider('default', { rawEvents: true }).doStream({
+      prompt: prompt('INSPECT_ARGUMENTS'),
+      providerOptions: { 'antigravity-cli': { effort } },
+    });
+    let argv: string[] = [];
+    for await (const part of result.stream) {
+      if (part.type !== 'raw') continue;
+      const event = part.rawValue as { event?: string; init?: { argv?: string[] } };
+      if (event.event === 'init') argv = event.init?.argv ?? [];
+    }
+    expect(argv.slice(argv.indexOf('--effort'), argv.indexOf('--effort') + 2)).toEqual([
+      '--effort',
+      effort,
+    ]);
   });
 
   it('converts terminal CLI failures into AI SDK errors', async () => {

@@ -1,6 +1,22 @@
-export type AntigravityModelId = 'default' | (string & {});
+export type AntigravityModelId =
+  | 'default'
+  | 'gemini-3.8-flash-low'
+  | 'gemini-3.8-flash-medium'
+  | 'gemini-3.8-flash-high'
+  | 'gemini-4-argon-low'
+  | 'gemini-4-argon-medium'
+  | 'gemini-4-argon-high'
+  | 'claude-opus-5-5-low'
+  | 'claude-opus-5-5-medium'
+  | 'claude-opus-5-5-high'
+  | 'claude-sonnet-5-5-low'
+  | 'claude-sonnet-5-5-medium'
+  | 'claude-sonnet-5-5-high'
+  | (string & {});
 
-export type AntigravityEffort = 'low' | 'medium' | 'high';
+export type AntigravityEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type AntigravityPermissionMode =
+  'inherit' | 'sandbox' | 'accept-edits' | 'auto' | 'plan' | 'turbo';
 
 export interface Logger {
   debug(message: string): void;
@@ -20,6 +36,12 @@ export interface AntigravitySettings {
   env?: Record<string, string>;
   effort?: AntigravityEffort;
   agent?: string;
+  /** Canonical permission preset. Takes precedence over legacy sandbox/bypass settings. */
+  permissionMode?: AntigravityPermissionMode;
+  /** Throw instead of omitting unsupported AI SDK features. Defaults to warn. */
+  unsupportedFeatures?: 'warn' | 'error';
+  /** End-to-end deadline, including time waiting for a provider concurrency slot. */
+  timeoutMs?: number;
   /** Resume a specific Antigravity conversation. */
   conversationId?: string;
   /** Resume the most recent Antigravity conversation. */
@@ -41,11 +63,16 @@ export interface AntigravitySettings {
 
 export interface AntigravityProviderSettings {
   defaultSettings?: AntigravitySettings;
+  /** Shared across every model created by this provider. Defaults to 4. */
+  maxConcurrentRequests?: number;
 }
 
 export interface AntigravityProviderOptions {
   effort?: AntigravityEffort;
   agent?: string;
+  permissionMode?: AntigravityPermissionMode;
+  unsupportedFeatures?: 'warn' | 'error';
+  timeoutMs?: number;
   conversationId?: string;
   continue?: boolean;
   sandbox?: boolean;
